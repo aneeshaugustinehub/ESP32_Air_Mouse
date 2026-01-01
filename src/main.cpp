@@ -45,7 +45,7 @@ SimpleKalmanFilter kfY(2, 2, 0.01);
 
 // Variables
 float calibX = 0, calibY = 0, calibZ = 0;
-int deadzone = 3; 
+int deadzone = 1; 
 unsigned long lastTime = 0;  // For the timer optimization
 
 void setup() {
@@ -114,12 +114,12 @@ void loop() {
       float smoothX = kfX.updateEstimate(rawZ - calibZ); // Gyro Z
       float smoothY = kfY.updateEstimate(rawX - calibX); // Gyro X
 
-      int moveX = (smoothX / 450); 
-      int moveY = (smoothY / 500);
+      int moveX = (smoothX / 200); 
+      int moveY = (smoothY / 250);
 
       // Simple deadzone check
-      if (abs(moveX) < deadzone) moveX = 0;
-      if (abs(moveY) < deadzone) moveY = 0;
+      if (abs(moveX) < 1) moveX = 0;
+      if (abs(moveY) < 1) moveY = 0;
 
       if (moveX != 0 || moveY != 0) {
         bleMouse.move(moveX, moveY);
