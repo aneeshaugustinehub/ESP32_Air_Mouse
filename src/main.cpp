@@ -2,7 +2,7 @@
 #include <BleMouse.h>
 #include <Wire.h>
 
-// --- KALMAN FILTER CLASS ---
+// --- KALMAN FILTER CLASS (Compacted for speed) ---
 class SimpleKalmanFilter {
 public:
   SimpleKalmanFilter(float mea_e, float est_e, float q);
@@ -29,32 +29,33 @@ float SimpleKalmanFilter::updateEstimate(float mea) {
   _last_estimate = _current_estimate;
   return _current_estimate;
 }
-// --------------------------
 
+// --- SETUP ---
 BleMouse bleMouse("Air Mouse", "Espressif", 100);
 
-// --- PINS (4 & 15) ---
+// Pins
 #define SDA_PIN 4 
 #define SCL_PIN 15
-
 #define MPU_ADDR 0x68
 #define LED_PIN 2     
 
-// --- FILTER SETTINGS ---
-// (Measurement Noise, Estimation Noise, Process Noise)
-// Process Noise (0.01): Lower = Smoother, Higher = More Responsive
+// Kalman Filters
 SimpleKalmanFilter kfX(2, 2, 0.01);
 SimpleKalmanFilter kfY(2, 2, 0.01);
 
+// Variables
 float calibX = 0, calibY = 0, calibZ = 0;
-int deadzone = 3;     
+int deadzone = 3; 
+unsigned long lastTime = 0;  // For the timer optimization
 
 void setup() {
   Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
   
   Wire.begin(SDA_PIN, SCL_PIN);
-  Wire.setClock(100000); 
+  
+  // OPTIMIZATION 1: Increase I2C Speed to 400kHz (Fast Mode)
+  Wire.setClock(400000); 
 
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(0x6B);  
@@ -62,17 +63,13 @@ void setup() {
   Wire.endTransmission();
   
   Serial.println("✅ Sensor Active.");
+  Serial.println("   DO NOT MOVE THE MOUSE! Calibrating...");
 
-  Serial.println("--------------------------------");
-  Serial.println("   DO NOT MOVE THE MOUSE!       ");
-  Serial.println("   Calibrating for 3 seconds... ");
-  Serial.println("--------------------------------");
+  digitalWrite(LED_PIN, HIGH);
+  delay(10); // Short wait
   
   long sumX = 0, sumY = 0, sumZ = 0;
   int numReadings = 1000;
-
-  digitalWrite(LED_PIN, HIGH);
-  delay(10);
   
   for (int i = 0; i < numReadings; i++) {
     Wire.beginTransmission(MPU_ADDR);
@@ -80,14 +77,11 @@ void setup() {
     Wire.endTransmission(false);
     Wire.requestFrom(MPU_ADDR, 6, 1);
 
-    int16_t x = Wire.read() << 8 | Wire.read();
-    int16_t y = Wire.read() << 8 | Wire.read();
-    int16_t z = Wire.read() << 8 | Wire.read();
-
-    sumX += x;
-    sumY += y;
-    sumZ += z;
-    delay(3);
+    // Efficient bit-shifting read
+    sumX += (int16_t)(Wire.read() << 8 | Wire.read());
+    sumY += (int16_t)(Wire.read() << 8 | Wire.read());
+    sumZ += (int16_t)(Wire.read() << 8 | Wire.read());
+    delay(2); // Reduced calibration delay slightly
   }
 
   digitalWrite(LED_PIN, LOW); 
@@ -101,48 +95,42 @@ void setup() {
 }
 
 void loop() {
-  if (bleMouse.isConnected()) {
-    Wire.beginTransmission(MPU_ADDR);
-    Wire.write(0x43);
-    Wire.endTransmission(false);
-    Wire.requestFrom(MPU_ADDR, 6, 1);
-
-    int16_t rawX = Wire.read() << 8 | Wire.read();
-    int16_t rawY = Wire.read() << 8 | Wire.read();
-    int16_t rawZ = Wire.read() << 8 | Wire.read();
-
-    float gyroX = rawX - calibX;
-    float gyroY = rawY - calibY;
-    float gyroZ = rawZ - calibZ;
-
-    // --- KALMAN FILTERING ---
-    // We pass the noisy raw data into the filter
-    // The filter returns the smooth "Estimated" value
+  // OPTIMIZATION 2: Non-blocking Timer (Replaces delay)
+  // This keeps the Bluetooth connection healthier
+  if (millis() - lastTime > 10) {
+    lastTime = millis();
     
-    // X Axis uses Gyro Z (Left/Right)
-    float smoothX = kfX.updateEstimate(gyroZ);
-    
-    // Y Axis uses Gyro Y (Up/Down)
-    float smoothY = kfY.updateEstimate(gyroX);
+    if (bleMouse.isConnected()) {
+      Wire.beginTransmission(MPU_ADDR);
+      Wire.write(0x43);
+      Wire.endTransmission(false);
+      Wire.requestFrom(MPU_ADDR, 6, 1);
 
-    // --- MOVEMENT ---
-    // Note: We use the "smooth" variables now, not the raw gyro
-    int moveX = (smoothX / 450); 
-    int moveY = (smoothY / 500);
+      int16_t rawX = Wire.read() << 8 | Wire.read();
+      int16_t rawY = Wire.read() << 8 | Wire.read();
+      int16_t rawZ = Wire.read() << 8 | Wire.read();
 
-    if (abs(moveX) < deadzone) moveX = 0;
-    if (abs(moveY) < deadzone) moveY = 0;
+      // OPTIMIZATION 3: Direct Math (Skip intermediate variables)
+      float smoothX = kfX.updateEstimate(rawZ - calibZ); // Gyro Z
+      float smoothY = kfY.updateEstimate(rawX - calibX); // Gyro X
 
-    if (moveX != 0 || moveY != 0) {
-      bleMouse.move(moveX, moveY);
+      int moveX = (smoothX / 450); 
+      int moveY = (smoothY / 500);
+
+      // Simple deadzone check
+      if (abs(moveX) < deadzone) moveX = 0;
+      if (abs(moveY) < deadzone) moveY = 0;
+
+      if (moveX != 0 || moveY != 0) {
+        bleMouse.move(moveX, moveY);
+      }
+      
+      // Click Logic
+      if (digitalRead(0) == LOW) {
+        if (!bleMouse.isPressed(MOUSE_LEFT)) bleMouse.press(MOUSE_LEFT);
+      } else {
+        if (bleMouse.isPressed(MOUSE_LEFT)) bleMouse.release(MOUSE_LEFT);
+      }
     }
-    
-    if (digitalRead(0) == LOW) {
-      if (!bleMouse.isPressed(MOUSE_LEFT)) bleMouse.press(MOUSE_LEFT);
-    } else {
-      if (bleMouse.isPressed(MOUSE_LEFT)) bleMouse.release(MOUSE_LEFT);
-    }
-
-    delay(10); 
   }
 }
