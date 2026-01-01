@@ -123,12 +123,12 @@ void loop() {
     float smoothX = kfX.updateEstimate(gyroZ);
     
     // Y Axis uses Gyro Y (Up/Down)
-    float smoothY = kfY.updateEstimate(gyroY);
+    float smoothY = kfY.updateEstimate(gyroX);
 
     // --- MOVEMENT ---
     // Note: We use the "smooth" variables now, not the raw gyro
-    int moveX = (smoothX / 150); 
-    int moveY = (smoothY / 150);
+    int moveX = (smoothX / 450); 
+    int moveY = (smoothY / 500);
 
     if (abs(moveX) < deadzone) moveX = 0;
     if (abs(moveY) < deadzone) moveY = 0;
